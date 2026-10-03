@@ -1,0 +1,27 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.ipynb_checkpoints/
+
+# Virtual environment
+.venv/
+venv/
+
+# Data (M5 is large; re-fetch with scripts/download_m5.py)
+data/raw/
+data/processed/
+*.whl
+
+# Experiment artifacts
+runs/
+checkpoints/
+outputs/
+*.log
+
+# Documentation (not committed to remote)
+Docs/
+agents.md
+TEAM_CODE_GUIDE.md
+README.md

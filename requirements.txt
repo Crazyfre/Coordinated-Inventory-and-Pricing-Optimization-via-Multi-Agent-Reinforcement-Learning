@@ -1,0 +1,28 @@
+# Phase 0 shared foundation dependencies
+# Plans: implementation_plan/PHASE_PLAN_{PRICING,REPLENISHMENT}_MODULE.md
+
+# Environment API
+gymnasium>=1.0.0
+
+# Numerics and data handling
+numpy>=1.26
+pandas>=2.2
+
+# RL policy networks (MAPPO actors + centralized critic)
+torch>=2.5
+
+# Demand model calibration (Phase P1: NB GLM)
+statsmodels>=0.14
+
+# Plots / learning curves
+matplotlib>=3.8
+
+# Utilities
+tqdm>=4.66
+pyyaml>=6.0
+
+# M5 dataset download (Kaggle)
+kagglehub>=0.2
+
+# Testing (Phase 0 exit criterion: pytest green)
+pytest>=8.0
