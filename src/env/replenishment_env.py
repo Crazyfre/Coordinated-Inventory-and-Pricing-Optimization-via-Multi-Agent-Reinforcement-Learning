@@ -62,9 +62,9 @@ class ReplenishmentEnv(gym.Env):
         demand_source: DemandSource | None = None,
         forecaster: DemandForecast | None = None,
         pricing_hook: PricingHook | None = None,
-        base_price: float = 10.0,
-        unit_cost: float = 6.0,
-        initial_inventory: float = 30.0,
+        base_price: float | np.ndarray = 10.0,
+        unit_cost: float | np.ndarray = 6.0,
+        initial_inventory: float | np.ndarray = 30.0,
         capacity: float = 500.0,
         obs_pipe_horizon: int | None = None,
     ):
@@ -76,14 +76,20 @@ class ReplenishmentEnv(gym.Env):
             self.config.env.n_skus, window=7
         )
         self.pricing_hook = pricing_hook
-        self.base_price = float(base_price)
-        self.unit_cost = float(unit_cost)
-        self.initial_inventory = float(initial_inventory)
+        self.initial_inventory = float(initial_inventory) if np.isscalar(initial_inventory) else np.asarray(initial_inventory, dtype=float).copy()
         self.capacity = float(capacity)
         self.obs_pipe_horizon = obs_pipe_horizon or self.config.lead_time.max_days
 
         self.n = self.config.env.n_skus
         self.k = self.config.demand.history_window_k
+        # Scalars broadcast to per-SKU vectors; the calibrated-simulator demo
+        # passes the real M5 base prices and per-SKU unit costs.
+        self.base_price = np.broadcast_to(
+            np.asarray(base_price, dtype=float), (self.n,)
+        ).copy()
+        self.unit_cost = np.broadcast_to(
+            np.asarray(unit_cost, dtype=float), (self.n,)
+        ).copy()
         self.grid = np.arange(
             0, self.config.replenishment.q_max + 1, self.config.replenishment.order_step
         )
@@ -104,7 +110,7 @@ class ReplenishmentEnv(gym.Env):
         self.pipeline: OrderPipeline | None = None
         self.day = 0
         self._demand_history: deque[np.ndarray] = deque(maxlen=self.k)
-        self._current_price = np.full(self.n, self.base_price)
+        self._current_price = self.base_price.copy()
         self._last_lead_times = np.zeros(self.n, dtype=int)
         self._current_obs: np.ndarray | None = None
 
@@ -132,7 +138,12 @@ class ReplenishmentEnv(gym.Env):
         rng = self.np_random  # gym-seeded generator, shared by all components
 
         self.inventory = InventoryEngine(
-            self.n, self.capacity, initial_inventory=np.full(self.n, self.initial_inventory)
+            self.n, self.capacity,
+            initial_inventory=(
+                np.full(self.n, self.initial_inventory)
+                if np.isscalar(self.initial_inventory)
+                else np.asarray(self.initial_inventory, dtype=float).copy()
+            ),
         )
         self.pipeline = OrderPipeline(
             self.n, self.config.lead_time, rng=rng
@@ -146,7 +157,7 @@ class ReplenishmentEnv(gym.Env):
         self.forecaster.reset()
 
         self.day = 1
-        self._current_price = np.full(self.n, self.base_price)
+        self._current_price = self.base_price.copy()
         self._last_lead_times = np.zeros(self.n, dtype=int)
 
         # Warm-up demand history: k days "before day 1" (labeled -k..-1) so
@@ -197,7 +208,7 @@ class ReplenishmentEnv(gym.Env):
             lost_sales=lost,
             inventory_end=self.inventory.on_hand,
             orders_placed=self._accepted_today,   # delivered units (R1 capacity rule)
-            unit_costs=np.full(self.n, self.unit_cost),
+            unit_costs=self.unit_cost,
             prev_prices=prev_price,
             reward_cfg=cfg.reward,
         )

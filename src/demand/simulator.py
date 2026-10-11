@@ -130,6 +130,7 @@ class CalibratedDemandSimulator:
         if start_day_index is not None:
             self.start_day_index = int(start_day_index)
         self._env_day = 0
+        self._last_mu = None
 
     def set_current_price(self, prices: np.ndarray) -> None:
         """Env pushes the current absolute price vector (integration seam)."""
@@ -139,29 +140,55 @@ class CalibratedDemandSimulator:
         if self._price is None:
             raise ValueError("set_current_price() must be called before sampling")
         self._env_day = day
-
-        # Map env day -> M5 calendar day (cycles within the calendar horizon).
-        horizon = self.calendar_feats.shape[0]
-        m5_day = ((self.start_day_index + day - 2) % horizon) + 1
-        x = self.calendar_feats[m5_day - 1]  # (k_cal,)
-
-        log_mu = (
-            self.b0
-            + self.elasticity * np.log(np.maximum(self._price, 1e-6)
-                                       / self._base_price_vector())
-            + self.b_cal @ x
-        )
-        if self.shock_std.any():
-            z = self.rng.standard_normal(self.n)
-            log_mu = log_mu + self.L @ (self.shock_std * z)
-        mu = np.exp(np.clip(log_mu, -5.0, 8.0))
-        mu = np.clip(mu, 0.1 * self.level_anchor, 5.0 * self.level_anchor)
-        self._last_mu = mu.copy()
+        mu = self._mu_mean(day, self._price, with_shocks=True)
+        self._last_mu = mu.copy()  # diagnostic handle (tests read this)
 
         # NegBin(mu, phi) via gamma-Poisson mixture (vectorised, seeded).
         gamma = self.rng.gamma(shape=self.phi, scale=mu / self.phi)
         demand = self.rng.poisson(gamma).astype(float)
         return demand
+
+    # ------------------------------------------------------------------ mean model
+
+    def _mu_mean(
+        self, env_day: int, prices: np.ndarray, *, with_shocks: bool = False
+    ) -> np.ndarray:
+        """log-linear mean for env `day` at absolute `prices`, with clamps.
+
+        `prices` must already be a finite float vector. Returns the mean
+        demand vector mu (n,), identical to the mean used inside __call__
+        for the same (day, price) pair.
+        """
+        horizon = self.calendar_feats.shape[0]
+        m5_day = ((self.start_day_index + env_day - 2) % horizon) + 1
+        x = self.calendar_feats[m5_day - 1]  # (k_cal,)
+
+        log_mu = (
+            self.b0
+            + self.elasticity * np.log(np.maximum(prices, 1e-6) / self._base_price_vector())
+            + self.b_cal @ x
+        )
+        if with_shocks and self.shock_std.any():
+            z = self.rng.standard_normal(self.n)
+            log_mu = log_mu + self.L @ (self.shock_std * z)
+        mu = np.exp(np.clip(log_mu, -5.0, 8.0))
+        return np.clip(mu, 0.1 * self.level_anchor, 5.0 * self.level_anchor)
+
+    def mu_for(self, day: int, prices: np.ndarray) -> np.ndarray:
+        """Deterministic mean demand for env `day` at absolute `prices`.
+
+        The calibrated D_hat source (co-owned forecast contract) and the
+        demand-curve diagnostics both go through this. Does not consume RNG
+        and does not mutate simulator state (side-effect free).
+        """
+        return self._mu_mean(day, np.asarray(prices, dtype=float), with_shocks=False)
+
+    def current_mu(self) -> np.ndarray:
+        """Deterministic mean for the CURRENT day at the CURRENT price
+        (diagnostics/tests; same calendar mapping as __call__)."""
+        if self._price is None:
+            raise ValueError("set_current_price() must be called before current_mu()")
+        return self._mu_mean(self._env_day, self._price, with_shocks=False)
 
     # ------------------------------------------------------------------ helpers
 
@@ -174,17 +201,3 @@ class CalibratedDemandSimulator:
             skus = {s.series_id: s for s in load_skus()}
             self.base_prices = np.array([skus[s].base_price for s in self.series_ids])
         return self.base_prices
-
-    def current_mu(self) -> np.ndarray:
-        """Deterministic mean for the CURRENT day (for diagnostics/tests)."""
-        horizon = self.calendar_feats.shape[0]
-        m5_day = ((self.start_day_index + self._env_day - 2) % horizon) + 1
-        x = self.calendar_feats[m5_day - 1]
-        log_mu = (
-            self.b0
-            + self.elasticity * np.log(np.maximum(self._price, 1e-6)
-                                       / self._base_price_vector())
-            + self.b_cal @ x
-        )
-        mu = np.exp(np.clip(log_mu, -5.0, 8.0))
-        return np.clip(mu, 0.1 * self.level_anchor, 5.0 * self.level_anchor)
