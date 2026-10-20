@@ -32,18 +32,42 @@ from src.config.locked_config import LockedConfig, get_locked_config
 # Action / observation container types
 # ---------------------------------------------------------------------------
 
+
+def pricing_indices(action, scope, n_skus, n_multipliers):
+    """Validate locked-grid indices; scalars explicitly mean uniform pricing.
+
+    Vector actions are available only for per_sku scope. No clipping/coercion
+    of float/bool indices; caller handles ignored nondecision days first.
+    """
+    if scope not in ('shared', 'per_sku'):
+        raise ValueError("pricing_scope must be 'shared' or 'per_sku'")
+    array = np.asarray(action)
+    if array.dtype.kind not in 'iu':
+        raise ValueError('price indices must be integers')
+    if array.ndim == 0:
+        indices = np.full(n_skus, int(array), dtype=np.int64)
+    elif scope == 'per_sku' and array.shape == (n_skus,):
+        indices = array.copy()
+    else:
+        raise ValueError('price indices require scalar or per-SKU vector shape (n,)')
+    if np.any(indices < 0) or np.any(indices >= n_multipliers):
+        raise ValueError('price index outside locked grid')
+    return indices
+
+
 @dataclass
 class JointAction:
     """Actions for one environment day (S2.4, S2.5).
 
-    pricing_multiplier_index: index into PricingActionConfig.multipliers,
+    pricing_multiplier_index: scalar shared index or per-SKU integer vector
+        into PricingActionConfig.multipliers,
         or None on days when the pricing agent does not act.
     replenishment_qty_idx: per-SKU index into the order grid, or None when
         the replenishment agent does not act. The grid itself is derived
         from ReplenishmentActionConfig (0..q_max step order_step).
     """
 
-    pricing_multiplier_index: int | None = None
+    pricing_multiplier_index: int | np.ndarray | None = None
     replenishment_qty_idx: np.ndarray | None = None  # shape (n_skus,), int
 
 

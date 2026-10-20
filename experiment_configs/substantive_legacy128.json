@@ -1,0 +1,15 @@
+{
+  "mode": "development",
+  "split": "validation",
+  "days": 28,
+  "episodes": 5,
+  "seed": 20261012,
+  "scenarios": ["S2"],
+  "ablations": [],
+  "methods": ["B1", "B2", "B3", "B4", "B5", "B6", "B7"],
+  "calibration": "outputs/evaluation_research/calibration/train_only_nb.json",
+  "checkpoint_root": "outputs/training_research/legacy_mappo",
+  "checkpoints": [],
+  "output": "outputs/evaluation_research/legacy128_validation",
+  "notes": "Integrates completed sibling raw-input MAPPO 128-update control; five training seeds if all complete; validation domain changes calibration; not matched-budget comparison with 16-update pilots, not held-out final"
+}

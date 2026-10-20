@@ -1,0 +1,17 @@
+{
+  "mode": "development",
+  "split": "validation",
+  "days": 28,
+  "episodes": 20,
+  "seed": 20261012,
+  "scenarios": ["S1", "S2", "S3", "S4", "S5", "S6", "S7", "S8"],
+  "elasticity_sweep": [-0.5, -1.5, -3.0],
+  "ablations": ["A1", "A2", "A3", "A4", "A5", "A6", "A7"],
+  "methods": ["B1", "B2", "B3", "B4", "B5", "B6", "B7"],
+  "training_scenario": "S2",
+  "calibration": "outputs/evaluation_research/calibration/train_only_nb.json",
+  "checkpoint_root": "outputs/training_research/clean_development",
+  "checkpoints": [],
+  "output": "outputs/evaluation_research/clean_development",
+  "notes": "Prospective clean-trained integration; discovers completed checkpoint/config/verified-summary triplets only, default S2 training models; missing methods and retrained ablations stay explicit. Not executed or final-eligible merely because this config exists. Select training_scenario S1/S3 in distinct runs for stability analysis. Fresh output directory required for each run."
+}

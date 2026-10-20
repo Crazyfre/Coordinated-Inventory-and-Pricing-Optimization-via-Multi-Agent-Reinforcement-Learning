@@ -4,12 +4,23 @@ Uses a dictionary observation and JointAction; returns a diagnostics dictionary
 rather than Phase-0 StepInfo. select_price stages the weekly action BEFORE the
 restocking actor sees its observation, retaining the previous price for costs.
 """
+import gymnasium as gym
 import numpy as np
 from src.env.replenishment_env import ReplenishmentEnv
-from src.env.interface import JointAction
+from src.env.interface import JointAction, pricing_indices
 
 
 class JointRetailEnv(ReplenishmentEnv):
+    def __init__(self, *args, pricing_scope="shared", **kwargs):
+        if pricing_scope not in ("shared", "per_sku"):
+            raise ValueError("pricing_scope must be shared or per_sku")
+        self.pricing_scope = pricing_scope
+        super().__init__(*args, **kwargs)
+        size = len(self.config.pricing.multipliers)
+        self.pricing_nvec = np.full(self.n if pricing_scope == "per_sku" else 1, size, dtype=np.int64)
+        self.pricing_action_space = (gym.spaces.MultiDiscrete(self.pricing_nvec)
+                                     if pricing_scope == "per_sku" else gym.spaces.Discrete(size))
+
     @property
     def pricing_due(self):
         return (self.day - 1) % self.config.timing.pricing_interval_days == 0
@@ -31,9 +42,9 @@ class JointRetailEnv(ReplenishmentEnv):
     def select_price(self, index):
         if not self.pricing_due:
             return
-        if not isinstance(index, (int, np.integer)) or not 0 <= index < len(self.config.pricing.multipliers):
-            raise ValueError('price index outside locked grid')
-        self._pending_price = self.base_price * self.config.pricing.multipliers[index]
+        indices = pricing_indices(index, self.pricing_scope, self.n,
+                                  len(self.config.pricing.multipliers))
+        self._pending_price = self.base_price * np.asarray(self.config.pricing.multipliers)[indices]
 
     def replenishment_observation(self):
         if self._pending_price is None:

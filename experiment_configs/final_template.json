@@ -1,0 +1,59 @@
+{
+  "mode": "final",
+  "split": "test",
+  "days": 28,
+  "episodes": 100,
+  "elasticity_sweep": [
+    -0.5,
+    -1.5,
+    -3
+  ],
+  "seed": 9371941,
+  "scenarios": [
+    "S1",
+    "S2",
+    "S3",
+    "S4",
+    "S5",
+    "S6",
+    "S7",
+    "S8"
+  ],
+  "ablations": [
+    "A1",
+    "A2",
+    "A3",
+    "A4",
+    "A5",
+    "A6",
+    "A7"
+  ],
+  "methods": [
+    "B1",
+    "B2",
+    "B3",
+    "B4",
+    "B5",
+    "B6",
+    "B7"
+  ],
+  "calibration": "outputs/calibration_correction/identifiable_v2/train_only_nb_identifiable_v2.json",
+  "checkpoints": [],
+  "output": "outputs/evaluation_research/final_identifiable_per_sku_v2",
+  "status": "BLOCKED template: ordering/service development gates, scientific predictive-bias acceptance, ten frozen seed manifests per B4-B7 and retrained A1-A7, B7 selection, and final scope freeze remain pending. Per-SKU pricing and delivered-unit procurement adopted; centralized V(s) clarified.",
+  "manifest_example_not_a_real_checkpoint": {
+    "method": "B6",
+    "path": "outputs/FINAL_CHECKPOINT_PATH_NOT_YET_CREATED.pt",
+    "training_seed": 11,
+    "updates": 128,
+    "training_end_day": 1885,
+    "split": "train",
+    "frozen": false,
+    "ablation": "none",
+    "stable": true,
+    "hidden": 64,
+    "pricing_scope": "per_sku",
+    "action_schema": "REPLACE_WITH_EXACT_SCHEMA_FROM_TRAINING_CONFIG_NOT_A_VALID_SCHEMA"
+  },
+  "pricing_scope": "per_sku"
+}

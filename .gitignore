@@ -26,3 +26,11 @@ agents.md
 TEAM_CODE_GUIDE.md
 README.md
 implementation_plan/
+
+# Local research documentation and generated review deliverables
+*.md
+output/
+tmp/
+research_archive/
+demo/qa_results/
+demo/progress_snapshot.json

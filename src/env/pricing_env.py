@@ -52,6 +52,7 @@ from src.env.forecast import DemandForecast, RecentMeanForecaster
 from src.env.inventory import InventoryEngine
 from src.env.pipeline import OrderPipeline
 from src.env.reward import compute_reward
+from src.env.interface import pricing_indices
 
 DemandSource = Callable[[int], np.ndarray]
 # replenishment_daily_hook(day, view) -> qty (n_skus,) placed on `day`
@@ -104,6 +105,7 @@ class PricingEnv(gym.Env):
         initial_inventory: float | np.ndarray = 30.0,
         capacity: float = 500.0,
         calendar_provider: Callable[[int], np.ndarray] | None = None,
+        pricing_scope: str = "shared",
     ):
         super().__init__()
         self.config = config or get_locked_config()
@@ -140,7 +142,14 @@ class PricingEnv(gym.Env):
             else 2
         )
 
-        self.action_space = gym.spaces.Discrete(len(self.config.pricing.multipliers))
+        if pricing_scope not in ("shared", "per_sku"):
+            raise ValueError("pricing_scope must be shared or per_sku")
+        self.pricing_scope = pricing_scope
+        size = len(self.config.pricing.multipliers)
+        self.pricing_nvec = np.full(self.n if pricing_scope == "per_sku" else 1, size, dtype=np.int64)
+        self.pricing_action_space = (gym.spaces.MultiDiscrete(self.pricing_nvec)
+                                     if pricing_scope == "per_sku" else gym.spaces.Discrete(size))
+        self.action_space = self.pricing_action_space
         self.observation_space = gym.spaces.Box(
             low=-np.inf, high=np.inf, shape=(self._obs_dim(),), dtype=np.float32
         )
@@ -232,8 +241,9 @@ class PricingEnv(gym.Env):
         cfg = self.config
 
         # --- translate the pricing action ---
-        action = int(np.clip(int(action), 0, len(cfg.pricing.multipliers) - 1))
-        multiplier = cfg.pricing.multipliers[action]
+        indices = pricing_indices(action, self.pricing_scope, self.n, len(cfg.pricing.multipliers))
+        multipliers = np.asarray(cfg.pricing.multipliers)[indices]
+        multiplier = float(multipliers[0]) if self.pricing_scope == "shared" else multipliers.copy()
 
         price_changes = 0
         weekly_reward = 0.0
@@ -336,6 +346,8 @@ class PricingEnv(gym.Env):
     def _push_price_to_demand_source(self) -> None:
         if hasattr(self.demand_source, "set_current_price"):
             self.demand_source.set_current_price(self._current_price)
+        if hasattr(self.forecaster, "set_current_price"):
+            self.forecaster.set_current_price(self._current_price)
 
     def _hook_view(self) -> dict:
         """Everything a replenishment heuristic may see (Doc S2.3.2 data)."""

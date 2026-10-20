@@ -1,0 +1,101 @@
+{
+  "mode": "development",
+  "split": "validation",
+  "days": 28,
+  "episodes": 5,
+  "seed": 20261012,
+  "scenarios": [
+    "S1",
+    "S2",
+    "S3",
+    "S4",
+    "S5",
+    "S6",
+    "S7",
+    "S8"
+  ],
+  "elasticity_sweep": [
+    -0.5,
+    -1.5,
+    -3.0
+  ],
+  "ablations": [
+    "A1",
+    "A2",
+    "A3",
+    "A4",
+    "A5",
+    "A6",
+    "A7"
+  ],
+  "methods": [
+    "B1",
+    "B2",
+    "B3",
+    "B4",
+    "B5",
+    "B6",
+    "B7"
+  ],
+  "calibration": "outputs/evaluation_research/calibration/train_only_nb.json",
+  "checkpoint_root": "outputs/evaluation_research/short_training",
+  "checkpoints": [
+    {
+      "method": "B4",
+      "path": "outputs/evaluation_research/short_training/independent/seed_11/checkpoint.pt",
+      "training_seed": 11,
+      "stable": true,
+      "updates": 16,
+      "training_days": 28,
+      "ablation": "A1",
+      "frozen": false,
+      "provenance": "A1 operationalized by matched-budget separately optimized IPPO local critics; same checkpoint as B4; architecture comparison, not a surgically isolated critic intervention"
+    },
+    {
+      "method": "B4",
+      "path": "outputs/evaluation_research/short_training/independent/seed_22/checkpoint.pt",
+      "training_seed": 22,
+      "stable": true,
+      "updates": 16,
+      "training_days": 28,
+      "ablation": "A1",
+      "frozen": false,
+      "provenance": "A1 operationalized by matched-budget separately optimized IPPO local critics; same checkpoint as B4; architecture comparison, not a surgically isolated critic intervention"
+    },
+    {
+      "method": "B4",
+      "path": "outputs/evaluation_research/short_training/independent/seed_33/checkpoint.pt",
+      "training_seed": 33,
+      "stable": true,
+      "updates": 16,
+      "training_days": 28,
+      "ablation": "A1",
+      "frozen": false,
+      "provenance": "A1 operationalized by matched-budget separately optimized IPPO local critics; same checkpoint as B4; architecture comparison, not a surgically isolated critic intervention"
+    },
+    {
+      "method": "B4",
+      "path": "outputs/evaluation_research/short_training/independent/seed_44/checkpoint.pt",
+      "training_seed": 44,
+      "stable": true,
+      "updates": 16,
+      "training_days": 28,
+      "ablation": "A1",
+      "frozen": false,
+      "provenance": "A1 operationalized by matched-budget separately optimized IPPO local critics; same checkpoint as B4; architecture comparison, not a surgically isolated critic intervention"
+    },
+    {
+      "method": "B4",
+      "path": "outputs/evaluation_research/short_training/independent/seed_55/checkpoint.pt",
+      "training_seed": 55,
+      "stable": true,
+      "updates": 16,
+      "training_days": 28,
+      "ablation": "A1",
+      "frozen": false,
+      "provenance": "A1 operationalized by matched-budget separately optimized IPPO local critics; same checkpoint as B4; architecture comparison, not a surgically isolated critic intervention"
+    }
+  ],
+  "output": "outputs/evaluation_research/development_learned",
+  "notes": "16-update development policies; five training seeds each B4-B6; A1 reuses independent-training B4 architecture; A2-A7 unmodified-checkpoint probes; train-only validation domain differs from legacy training calibration; not final"
+}

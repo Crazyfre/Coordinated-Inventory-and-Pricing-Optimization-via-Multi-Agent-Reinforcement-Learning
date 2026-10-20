@@ -83,13 +83,16 @@ class CalibratedReplenishmentEnv(PairedSupplierScenario, ReplenishmentEnv):
         self.forecaster.set_current_price(self._current_price)
 
 
-def make_env(days=28, capacity=500., joint=True):
+def make_env(days=28, capacity=500., joint=True, pricing_scope="shared"):
     sim = CalibratedDemandSimulator(start_day_index=1800, shock_std=.15)
     lookup = {s.series_id:s.base_price for s in load_skus()}
     prices = np.array([lookup[s] for s in sim.series_ids])
     source = IndependentDemandStream(sim,prices)
     cls = CalibratedJointEnv if joint else CalibratedReplenishmentEnv
-    env = cls(episode_length_days=days,capacity=capacity,demand_source=source,
+    pricing_kwargs = dict(pricing_scope=pricing_scope) if joint else {}
+    if not joint and pricing_scope != "shared":
+        raise ValueError("per-SKU pricing requires joint environment")
+    env = cls(**pricing_kwargs, episode_length_days=days,capacity=capacity,demand_source=source,
               forecaster=CalibratedMeanForecaster(sim),base_price=prices,
               unit_cost=.6*prices,initial_inventory=np.minimum(sim.level_anchor*2,capacity/10))
     env.sim = sim
@@ -99,6 +102,13 @@ def make_env(days=28, capacity=500., joint=True):
 def heuristic(env, kind='ss', s_days=7., S_days=8.):
     b = env.observation_components()
     mean = b['forecast']
+    pending_price = getattr(env, '_pending_price', None)
+    mu_for = getattr(getattr(env, 'sim', None), 'mu_for', None)
+    if pending_price is not None and callable(mu_for):
+        # Named components still use the old price after select_price. Evaluate
+        # the deterministic staged-price mean without pushing prices or sampling.
+        # Generic/noncalibrated environments retain their observation forecast.
+        mean = mu_for(env.day, pending_price)
     pos = b['inventory']+b['pipeline'].sum(axis=1)
     if kind == 'zero':
         qty = np.zeros(env.n)
@@ -120,7 +130,7 @@ def evaluate(env, order_policy, episodes=4, seed=1000, price_policy=None):
         total, path, done = 0.,[],False
         while not done:
             if joint and env.pricing_due:
-                index = 2 if price_policy is None else int(price_policy(obs['pricing']))
+                index = 2 if price_policy is None else price_policy(obs['pricing'])
                 env.select_price(index)
             robs = env.replenishment_observation() if joint else obs
             action = order_policy(env,robs)

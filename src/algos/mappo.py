@@ -11,6 +11,8 @@ from torch import nn
 from torch.distributions import Categorical
 from src.algos.ppo import mlp, orthogonal_init, compute_gae
 from src.env.interface import JointAction
+from src.algos.stability import SignedLog
+from src.algos.pricing_schema import pricing_schema, pricing_action, validate_checkpoint_schema
 
 
 def interval_gae(rewards, values, starts, gamma=.99, lam=.95):
@@ -30,16 +32,17 @@ def interval_gae(rewards, values, starts, gamma=.99, lam=.95):
 
 
 class Actor(nn.Module):
-    def __init__(self, obs_dim, nvec, hidden):
+    def __init__(self, obs_dim, nvec, hidden, normalize_inputs=False):
         super().__init__()
         self.body = mlp([obs_dim, hidden, hidden])
+        self.input_transform = SignedLog() if normalize_inputs else nn.Identity()
         self.heads = nn.ModuleList([nn.Linear(hidden, int(n)) for n in nvec])
         self.apply(orthogonal_init)
         for h in self.heads:
             nn.init.orthogonal_(h.weight, 0.01)
 
     def forward(self, obs):
-        h = self.body(obs)
+        h = self.body(self.input_transform(obs))
         return [Categorical(logits=head(h)) for head in self.heads]
 
     def stats(self, obs, actions):
@@ -56,19 +59,28 @@ class Actor(nn.Module):
 
 
 class HeterogeneousMAPPO:
-    def __init__(self, env, hidden=64, lr=3e-4, epochs=4, reward_scale=100., lam=.95):
+    def __init__(self, env, hidden=64, lr=3e-4, epochs=4, reward_scale=100., lam=.95,
+                 normalize_inputs=False, target_kl=None):
         self.env = env
+        self.action_schema = pricing_schema(env)
         obs, _ = env.reset(seed=0)
-        self.pricing = Actor(len(obs['pricing']), [len(env.config.pricing.multipliers)], hidden)
-        self.replenishment = Actor(len(obs['replenishment']), env.action_space.nvec, hidden)
+        self.pricing = Actor(len(obs['pricing']), self.action_schema['pricing_nvec'], hidden, normalize_inputs)
+        self.replenishment = Actor(len(obs['replenishment']), env.action_space.nvec, hidden, normalize_inputs)
         self.critic = mlp([len(env.get_state()), hidden, hidden, 1])
+        if normalize_inputs:
+            self.critic = nn.Sequential(SignedLog(), self.critic)
         self.critic.apply(orthogonal_init)
         self.optimizers = [torch.optim.Adam(g.parameters(), lr=lr)
                            for g in [self.pricing,self.replenishment,self.critic]]
         self.gamma = env.config.rl.gamma
         self.lam, self.epochs, self.reward_scale = lam, epochs, reward_scale
-        if reward_scale <= 0:
+        self.target_kl = target_kl
+        self.normalize_inputs = normalize_inputs
+        if not np.isfinite(reward_scale) or reward_scale <= 0:
             raise ValueError('reward_scale must be positive')
+
+    def pricing_action(self, obs, greedy=True):
+        return pricing_action(self.pricing.act(obs, greedy)[0], self.action_schema)
 
     @torch.no_grad()
     def value(self, state):
@@ -78,10 +90,23 @@ class HeterogeneousMAPPO:
         torch.save({'pricing':self.pricing.state_dict(),
                     'replenishment':self.replenishment.state_dict(),
                     'critic':self.critic.state_dict(),
-                    'optimizers':[o.state_dict() for o in self.optimizers]},path)
+                    'optimizers':[o.state_dict() for o in self.optimizers],
+                    'normalize_inputs':self.normalize_inputs,'reward_scale':self.reward_scale,
+                    'action_schema':self.action_schema},path)
 
     def load(self, path):
         data = torch.load(path,map_location='cpu',weights_only=True)
+        if type(self) is HeterogeneousMAPPO and data.get('variant') is not None:
+            raise ValueError('labeled variant checkpoint requires its matching policy class')
+        validate_checkpoint_schema(data, self.action_schema)
+        normalized = data.get('normalize_inputs',any(k.startswith('1.0.') for k in data['critic']))
+        if normalized != self.normalize_inputs:
+            # Rewrapping preserves Parameter identities and optimizer bindings.
+            self.critic = nn.Sequential(SignedLog(),self.critic) if normalized else self.critic[1]
+            for actor in [self.pricing,self.replenishment]:
+                actor.input_transform = SignedLog() if normalized else nn.Identity()
+            self.normalize_inputs = normalized
+        self.reward_scale = data.get('reward_scale',self.reward_scale)
         for name in ['pricing','replenishment','critic']:
             getattr(self,name).load_state_dict(data[name])
         for o,s in zip(self.optimizers,data['optimizers']):
@@ -100,7 +125,7 @@ class HeterogeneousMAPPO:
                     pa, plp = self.pricing.act(obs['pricing'])
                     p_rows.append((obs['pricing'].copy(), pa, plp, self.value(state),
                                    state.copy(), len(rewards)))
-                    self.env.select_price(int(pa[0]))
+                    self.env.select_price(pricing_action(pa, self.action_schema))
                 robs = self.env.replenishment_observation()
                 state = self.env.get_state()
                 ra, rlp = self.replenishment.act(robs)
@@ -113,7 +138,7 @@ class HeterogeneousMAPPO:
             r_adv, r_ret = compute_gae(rewards,values,dones,0,self.gamma,self.lam)
             p_adv, p_ret = interval_gae(rewards,[x[3] for x in p_rows],
                                       [x[5] for x in p_rows],self.gamma,self.lam)
-            losses = []
+            losses, diagnostics = [], {}
             for actor, optimizer, rows, adv in zip(
                     [self.pricing,self.replenishment],self.optimizers[:2],
                     [p_rows,r_rows],[p_adv,r_adv]):
@@ -124,10 +149,19 @@ class HeterogeneousMAPPO:
                 for _ in range(self.epochs):
                     lp, entropy = actor.stats(o,a)
                     ratio = (lp-old).exp()
+                    kl = ((ratio-1)-(lp-old)).mean().item()
+                    if self.target_kl is not None and kl > self.target_kl:
+                        break
                     loss = -torch.minimum(ratio*advantage,ratio.clamp(.8,1.2)*advantage).mean()-.01*entropy.mean()
                     optimizer.zero_grad(); loss.backward()
                     nn.utils.clip_grad_norm_(actor.parameters(),.5); optimizer.step()
                 losses.append(loss.item())
+                name = 'pricing' if actor is self.pricing else 'replenishment'
+                with torch.no_grad():
+                    final_lp, final_entropy = actor.stats(o,a)
+                    final_ratio = (final_lp-old).exp()
+                    diagnostics[name+'_kl'] = ((final_ratio-1)-(final_lp-old)).mean().item()
+                    diagnostics[name+'_entropy'] = final_entropy.mean().item()
             states = torch.tensor(np.stack([x[4] for x in r_rows]+[x[4] for x in p_rows]),dtype=torch.float32)
             targets = torch.tensor(np.concatenate([r_ret,p_ret]),dtype=torch.float32)
             oldv = torch.tensor([x[3] for x in r_rows]+[x[3] for x in p_rows],dtype=torch.float32)
@@ -137,7 +171,7 @@ class HeterogeneousMAPPO:
                 loss = .5*torch.maximum((v-targets)**2,(clipped-targets)**2).mean()
                 self.optimizers[2].zero_grad(); loss.backward()
                 nn.utils.clip_grad_norm_(self.critic.parameters(),.5); self.optimizers[2].step()
-            metrics.append({'pricing_loss':losses[0],'replenishment_loss':losses[1],
+            metrics.append({**diagnostics, 'pricing_loss':losses[0],'replenishment_loss':losses[1],
                             'critic_loss':loss.item(),'daily_steps':len(rewards),
                             'pricing_decisions':len(p_rows),'episode_reward':float(rewards.sum()*self.reward_scale)})
         return metrics

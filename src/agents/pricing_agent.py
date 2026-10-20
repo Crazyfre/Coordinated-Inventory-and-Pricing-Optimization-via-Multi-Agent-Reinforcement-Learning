@@ -1,6 +1,7 @@
 """PPO pricing agent (Phase P3, pricing track).
 
-A thin glue layer: PricingEnv (weekly, Discrete(5)) + the shared PPO core
+A thin glue layer: weekly PricingEnv (shared Discrete or per-SKU MultiDiscrete)
++ the shared PPO core
 (src/algos/ppo.py). No RL logic lives here beyond wiring — the objective,
 GAE, clipping and optimization are all in the co-owned algos module so the
 replenishment track reuses identical machinery (agents.md decision 1).
@@ -24,11 +25,12 @@ from __future__ import annotations
 import numpy as np
 import torch
 
-from src.algos.ppo import DiscreteActorCritic, PPO, RolloutBuffer
+from src.algos.ppo import DiscreteActorCritic, MultiDiscreteActorCritic, PPO, RolloutBuffer
+from src.algos.pricing_schema import pricing_schema, validate_checkpoint_schema
 
 
 class PricingPPOAgent:
-    """PPO agent acting on PricingEnv's Discrete multiplier action space."""
+    """Weekly PPO over the environment's explicit shared or per-SKU price grid."""
 
     def __init__(
         self,
@@ -47,12 +49,19 @@ class PricingPPOAgent:
         device: str = "cpu",
     ):
         self.env = env
+        self.action_schema = pricing_schema(env)
+        self.n_price_heads = len(self.action_schema["pricing_nvec"])
         cfg = env.config
         self.n_actions = (
             act_dim if act_dim is not None else len(cfg.pricing.multipliers)
         )
         obs_dim = obs_dim if obs_dim is not None else env.observation_space.shape[0]
-        self.net = DiscreteActorCritic(obs_dim, self.n_actions, hidden=hidden)
+        if self.n_actions != len(cfg.pricing.multipliers):
+            raise ValueError("pricing act_dim must match locked multiplier grid")
+        self.net = (MultiDiscreteActorCritic(
+            obs_dim, self.action_schema["pricing_nvec"], hidden=hidden)
+            if self.action_schema["pricing_scope"] == "per_sku"
+            else DiscreteActorCritic(obs_dim, self.n_actions, hidden=hidden))
         self.ppo = PPO(
             self.net, lr=lr, clip_eps=clip_eps, entropy_coef=entropy_coef,
             epochs_per_update=epochs_per_update,
@@ -68,7 +77,7 @@ class PricingPPOAgent:
 
     # ------------------------------------------------------------------ acting
 
-    def act(self, obs: np.ndarray, greedy: bool = False) -> tuple[int, float, float]:
+    def act(self, obs: np.ndarray, greedy: bool = False) -> tuple[int | np.ndarray, float, float]:
         """(action, logp, value) — greedy picks the argmax multiplier."""
         return self.ppo.act(obs, greedy=greedy)
 
@@ -82,7 +91,8 @@ class PricingPPOAgent:
         self.rng = np.random.default_rng(seed)
         torch.manual_seed(seed)  # sampling in act() uses torch's global RNG
         obs, _ = self.env.reset(seed=int(seed))
-        buffer = RolloutBuffer(self.rollout_steps, self.obs_dim, device=self.device)
+        buffer = RolloutBuffer(self.rollout_steps, self.obs_dim,
+                               act_dim=self.n_price_heads, device=self.device)
         history: list[dict] = []
 
         for update in range(total_updates):
@@ -113,15 +123,15 @@ class PricingPPOAgent:
         Returns mean weekly reward, per-episode rewards and chosen actions.
         """
         ep_rewards: list[float] = []
-        actions_taken: list[list[int]] = []
+        actions_taken: list[list] = []
         for ep in range(episodes):
             obs, _ = self.env.reset(seed=seed + ep)
             total, actions = 0.0, []
             while True:
                 a, _, _ = self.act(obs, greedy=greedy)
-                obs, reward, term, trunc, info = self.env.step(int(a))
+                obs, reward, term, trunc, info = self.env.step(a)
                 total += reward
-                actions.append(int(a))
+                actions.append(np.asarray(a).tolist())
                 if term or trunc:
                     break
             ep_rewards.append(total)
@@ -135,7 +145,12 @@ class PricingPPOAgent:
     # ------------------------------------------------------------------ io
 
     def save(self, path: str) -> None:
-        self.ppo.save(path)
+        torch.save({"net": self.net.state_dict(),
+                    "optimizer": self.ppo.optimizer.state_dict(),
+                    "action_schema": self.action_schema}, path)
 
     def load(self, path: str) -> None:
-        self.ppo.load(path)
+        data = torch.load(path, map_location=self.device, weights_only=True)
+        validate_checkpoint_schema(data, self.action_schema)
+        self.net.load_state_dict(data["net"])
+        self.ppo.optimizer.load_state_dict(data["optimizer"])
